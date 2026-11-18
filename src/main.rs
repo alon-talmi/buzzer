@@ -12,7 +12,7 @@ use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const POLL: Duration = Duration::from_millis(250);
-const DEFAULT_HOLD: &str = "2h";
+const DEFAULT_HOLD: &str = "30m";
 
 #[derive(Parser)]
 #[command(name = "buzzer", version, about = "Wait your turn for a shared thing, then get buzzed.")]
@@ -107,6 +107,10 @@ struct Ticket {
     owner_pid: Option<u32>,
     #[serde(default)]
     expires: u64,
+    #[serde(default)]
+    taken: u64,
+    #[serde(default)]
+    renewed: u64,
 }
 
 struct Queue {
@@ -293,6 +297,8 @@ fn join(queue: &Queue, options: &JoinOptions) -> Ticket {
         hold: parse_duration(&options.hold),
         owner_pid: None,
         expires: 0,
+        taken: 0,
+        renewed: 0,
     };
     let _guard = lock(queue);
     write_ticket(queue, &ticket);
@@ -306,7 +312,9 @@ fn take_turn_if_first(queue: &Queue, ticket: &mut Ticket, owner_pid: Option<u32>
     if first.is_some_and(|f| f.id == ticket.id) && holder(queue).is_none() {
         ticket.held = true;
         ticket.owner_pid = owner_pid;
-        ticket.expires = now_secs() + ticket.hold;
+        ticket.taken = now_secs();
+        ticket.renewed = ticket.taken;
+        ticket.expires = ticket.taken + ticket.hold;
         write_ticket(queue, ticket);
         return true;
     }
@@ -319,13 +327,17 @@ fn place_in_line(queue: &Queue, ticket: &Ticket) -> usize {
 }
 
 fn parent_and_command(pid: u32) -> Option<(u32, String)> {
-    let out = Command::new("ps").args(["-o", "ppid=,command=", "-p", &pid.to_string()]).output().ok()?;
+    let out = Command::new("ps").args(["-o", "ppid=,comm=", "-p", &pid.to_string()]).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let (parent, command) = text.split_once(' ')?;
     Some((parent.trim().parse().ok()?, command.to_string()))
 }
 
-/// The agent session that asked for the turn: BUZZER_OWNER_PID, else the nearest ancestor named like claude.
+fn is_session_program(program_path: &str) -> bool {
+    program_path.to_lowercase().contains("claude")
+}
+
+/// The agent session that asked for the turn: BUZZER_OWNER_PID, else the nearest ancestor whose program is named like claude.
 fn detect_session_pid() -> Option<u32> {
     if let Some(pid) = std::env::var("BUZZER_OWNER_PID").ok().and_then(|v| v.parse().ok()) {
         return Some(pid);
@@ -337,7 +349,7 @@ fn detect_session_pid() -> Option<u32> {
             return None;
         }
         let (_, command) = parent_and_command(parent)?;
-        if command.to_lowercase().contains("claude") {
+        if is_session_program(&command) {
             return Some(parent);
         }
         pid = parent;
@@ -458,7 +470,8 @@ fn command_renew(at: Where, hold: Option<String>) -> i32 {
         eprintln!("buzzer: nobody holds {}", queue.name);
         return 1;
     };
-    current.expires = now_secs() + hold.map_or(current.hold, |h| parse_duration(&h));
+    current.renewed = now_secs();
+    current.expires = current.renewed + hold.map_or(current.hold, |h| parse_duration(&h));
     write_ticket(&queue, &current);
     println!("buzzer: renewed {}", queue.name);
     0
@@ -476,10 +489,24 @@ fn command_kick(at: Where, ticket: String) -> i32 {
     0
 }
 
+fn human(seconds: u64) -> String {
+    match seconds {
+        0..=89 => format!("{seconds}s"),
+        90..=5399 => format!("{}m", seconds / 60),
+        _ => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
 fn describe(ticket: &Ticket, now: u64) -> String {
     let who = if ticket.label.is_empty() { &ticket.cwd } else { &ticket.label };
     if ticket.held {
-        return format!("HOLDS   {who}  (ticket {}, {}s left)", ticket.id, ticket.expires.saturating_sub(now));
+        return format!(
+            "HOLDS   {who}  (ticket {}, held {}, renewed {} ago, frees itself in {})",
+            ticket.id,
+            human(now.saturating_sub(ticket.taken)),
+            human(now.saturating_sub(ticket.renewed)),
+            human(ticket.expires.saturating_sub(now))
+        );
     }
     format!("waiting {who}  (ticket {}{})", ticket.id, if ticket.jumped { ", jumped" } else { "" })
 }
@@ -531,4 +558,19 @@ fn main() {
         Verb::Status { queue, global } => command_status(queue, global),
     };
     process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_is_not_the_session_even_when_it_runs_a_claude_script() {
+        assert!(!is_session_program("/bin/zsh"));
+    }
+
+    #[test]
+    fn the_claude_program_is_the_session() {
+        assert!(is_session_program("/Users/x/Library/Application Support/Claude/claude-code/2.1/claude.app/Contents/MacOS/claude"));
+    }
 }

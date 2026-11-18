@@ -32,13 +32,26 @@ buzzer renew editor --hold 1h       # still working, restart the hold timer
 buzzer kick editor --ticket ID      # remove a stuck ticket (ID is in `status`)
 ```
 
-Options for `wait` and `run`: `--label "who I am"` (shown in status), `--hold 2h` (default 2h),
+Options for `wait` and `run`: `--label "who I am"` (shown in status), `--hold 30m` (default 30m),
 `-q` (quiet), `-g` (global scope).
+
+## Do not hog it
+
+The queue name is the thing being shared (a phone, a port, the Editor). Take the turn only when you are
+ready to use it right now, release the moment you stop (do not hold across a build, a download or a wait),
+and queue again for the next phase. Never hold "just in case". A hold frees itself after 30 minutes unless renewed.
 
 ## Teach your Claude sessions
 
 ```bash
 mkdir -p ~/.claude/skills/buzzer && cp skill/buzzer/SKILL.md ~/.claude/skills/buzzer/
+```
+
+To make sessions in one repo use it, paste this into that repo's `CLAUDE.md`:
+
+```markdown
+Shared things that only one session may use at a time (test devices, the Editor, ports) go through `buzzer`
+(`buzzer run <queue> -- <command>`; see the buzzer skill). Take the turn only when ready to use it now, release as soon as you stop.
 ```
 
 ## Scopes
@@ -56,7 +69,7 @@ State lives in `~/.local/state/buzzer/` (override with `BUZZER_HOME`).
 |---|---|
 | `run`: command ends or is killed | its own process, checked by process id |
 | `wait`: the agent session that took it dies | detected: the nearest parent process named `claude` (or `BUZZER_OWNER_PID`) is checked by process id |
-| `wait`: session alive but you forget `done` | the `--hold` limit (default 2h); `renew` restarts it |
+| `wait`: session alive but you forget `done` | the `--hold` limit (default 30m); `renew` restarts it |
 | A waiter's session or command dies | its ticket is dropped, it loses its place |
 
 ## Rules of the line
