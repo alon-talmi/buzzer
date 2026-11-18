@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
@@ -43,6 +44,9 @@ struct JoinOptions {
     /// Longest you may hold it before it frees itself
     #[arg(long, default_value = DEFAULT_HOLD)]
     hold: String,
+    /// Process id that keeps your turn alive: the turn ends when that process ends (also BUZZER_OWNER_PID)
+    #[arg(long, env = "BUZZER_OWNER_PID")]
+    owner: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -85,6 +89,26 @@ enum Verb {
         #[arg(long)]
         ticket: String,
     },
+    /// List a shared thing and the rule for using it, in plain words
+    Guard {
+        #[command(flatten)]
+        at: Where,
+        /// The rule, as a sentence anyone can read
+        rule: String,
+    },
+    /// Remove a shared thing from the list
+    Unguard {
+        #[command(flatten)]
+        at: Where,
+    },
+    /// Print the shared things and their rules (project first, then global)
+    Guards {
+        /// Print nothing when the list is empty (for scripts that show the list at the start of a job)
+        #[arg(long)]
+        quiet_if_empty: bool,
+    },
+    /// Print the guide: best practices for agents, scripts and people
+    Guide,
     /// Show a queue, or every queue in the scope
     Status {
         queue: Option<String>,
@@ -326,37 +350,6 @@ fn place_in_line(queue: &Queue, ticket: &Ticket) -> usize {
     line(queue).iter().position(|t| t.id == ticket.id).map_or(1, |i| i + 1)
 }
 
-fn parent_and_command(pid: u32) -> Option<(u32, String)> {
-    let out = Command::new("ps").args(["-o", "ppid=,comm=", "-p", &pid.to_string()]).output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let (parent, command) = text.split_once(' ')?;
-    Some((parent.trim().parse().ok()?, command.to_string()))
-}
-
-fn is_session_program(program_path: &str) -> bool {
-    program_path.to_lowercase().contains("claude")
-}
-
-/// The agent session that asked for the turn: BUZZER_OWNER_PID, else the nearest ancestor whose program is named like claude.
-fn detect_session_pid() -> Option<u32> {
-    if let Some(pid) = std::env::var("BUZZER_OWNER_PID").ok().and_then(|v| v.parse().ok()) {
-        return Some(pid);
-    }
-    let mut pid = std::process::id();
-    for _ in 0..12 {
-        let (parent, _) = parent_and_command(pid)?;
-        if parent <= 1 {
-            return None;
-        }
-        let (_, command) = parent_and_command(parent)?;
-        if is_session_program(&command) {
-            return Some(parent);
-        }
-        pid = parent;
-    }
-    None
-}
-
 fn register_stop_flag() -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     for signal in [SIGTERM, SIGINT, SIGHUP] {
@@ -400,7 +393,7 @@ fn command_wait(at: Where, join_options: JoinOptions) -> i32 {
     let stop = register_stop_flag();
     let mut ticket = join(&queue, &join_options);
     let hint = release_hint(&at.queue, at.global, &ticket);
-    if wait_for_turn(&queue, &mut ticket, detect_session_pid(), join_options.quiet, &hint, &stop) {
+    if wait_for_turn(&queue, &mut ticket, join_options.owner, join_options.quiet, &hint, &stop) {
         return 0;
     }
     leave(&queue, &ticket);
@@ -548,6 +541,61 @@ fn command_status(queue_name: Option<String>, global: bool) -> i32 {
     0
 }
 
+fn guards_file(global: bool) -> PathBuf {
+    scope_dir(global).0.join("guards.json")
+}
+
+fn read_guards(global: bool) -> BTreeMap<String, String> {
+    fs::read_to_string(guards_file(global)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn write_guards(global: bool, guards: &BTreeMap<String, String>) {
+    let path = guards_file(global);
+    fs::create_dir_all(path.parent().unwrap()).unwrap_or_else(|e| fail(&format!("cannot create folder: {e}")));
+    fs::write(&path, serde_json::to_string_pretty(guards).unwrap()).unwrap_or_else(|e| fail(&format!("cannot save list: {e}")));
+}
+
+fn command_guard(at: Where, rule: String) -> i32 {
+    if !valid_queue_name(&at.queue) {
+        fail(&format!("bad queue name '{}' (letters, digits, . _ -)", at.queue));
+    }
+    let mut guards = read_guards(at.global);
+    guards.insert(at.queue.clone(), rule);
+    write_guards(at.global, &guards);
+    println!("buzzer: listed {} as shared ({})", at.queue, scope_dir(at.global).1);
+    0
+}
+
+fn command_unguard(at: Where) -> i32 {
+    let mut guards = read_guards(at.global);
+    if guards.remove(&at.queue).is_none() {
+        eprintln!("buzzer: {} is not on the {} list", at.queue, scope_dir(at.global).1);
+        return 1;
+    }
+    write_guards(at.global, &guards);
+    println!("buzzer: removed {} from the list", at.queue);
+    0
+}
+
+fn command_guards(quiet_if_empty: bool) -> i32 {
+    let lists = [(false, read_guards(false)), (true, read_guards(true))];
+    if lists.iter().all(|(_, guards)| guards.is_empty()) {
+        if !quiet_if_empty {
+            println!("buzzer: nothing is listed as shared here (add one: buzzer guard NAME \"rule\")");
+        }
+        return 0;
+    }
+    println!("buzzer: these are shared. Queue before you use them (read `buzzer guide` if you have not).");
+    for (global, guards) in lists {
+        let (_, label) = scope_dir(global);
+        for (name, rule) in guards {
+            let flag = if global { " -g" } else { "" };
+            println!("  {name}{flag}  [{label}]  {rule}");
+        }
+    }
+    0
+}
+
 fn main() {
     let code = match Cli::parse().verb {
         Verb::Wait { at, join } => command_wait(at, join),
@@ -555,22 +603,15 @@ fn main() {
         Verb::Done { at, ticket } => command_done(at, ticket),
         Verb::Renew { at, hold } => command_renew(at, hold),
         Verb::Kick { at, ticket } => command_kick(at, ticket),
+        Verb::Guard { at, rule } => command_guard(at, rule),
+        Verb::Unguard { at } => command_unguard(at),
+        Verb::Guards { quiet_if_empty } => command_guards(quiet_if_empty),
+        Verb::Guide => {
+            print!("{}", include_str!("../docs/guide.md"));
+            0
+        }
         Verb::Status { queue, global } => command_status(queue, global),
     };
     process::exit(code);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_shell_is_not_the_session_even_when_it_runs_a_claude_script() {
-        assert!(!is_session_program("/bin/zsh"));
-    }
-
-    #[test]
-    fn the_claude_program_is_the_session() {
-        assert!(is_session_program("/Users/x/Library/Application Support/Claude/claude-code/2.1/claude.app/Contents/MacOS/claude"));
-    }
-}

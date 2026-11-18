@@ -1,13 +1,13 @@
 [package]
 name = "buzzer"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Wait your turn for a shared thing (a test device, an editor), then get buzzed."
 license = "MIT"
 readme = "README.md"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

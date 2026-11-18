@@ -16,7 +16,7 @@ brew update && brew upgrade buzzer                                  # later
 ## Why no messages and no polling
 
 `buzzer wait NAME` is a normal command that **exits when it is your turn**.
-Run it in the background of an agent session (Claude Code: Bash `run_in_background`) and the
+Run it in the background of an agent session (for example a background shell command) and the
 harness wakes the session when the command exits. Nobody messages anybody.
 
 ## Use
@@ -33,7 +33,7 @@ buzzer kick editor --ticket ID      # remove a stuck ticket (ID is in `status`)
 ```
 
 Options for `wait` and `run`: `--label "who I am"` (shown in status), `--hold 30m` (default 30m),
-`-q` (quiet), `-g` (global scope).
+`--owner PID` (turn ends when that process ends), `-q` (quiet), `-g` (global scope).
 
 ## Do not hog it
 
@@ -41,18 +41,13 @@ The queue name is the thing being shared (a phone, a port, the Editor). Take the
 ready to use it right now, release the moment you stop (do not hold across a build, a download or a wait),
 and queue again for the next phase. Never hold "just in case". A hold frees itself after 30 minutes unless renewed.
 
-## Teach your Claude sessions
+## Guide for agents and people
 
-```bash
-mkdir -p ~/.claude/skills/buzzer && cp skill/buzzer/SKILL.md ~/.claude/skills/buzzer/
-```
+`buzzer guide` prints [docs/guide.md](docs/guide.md): the idea, manners, naming, scopes, what to do when something goes wrong.
+Point your agents at it (a line in their instructions: "shared things go through buzzer; run `buzzer guide`").
+List what is shared in a project with `buzzer guard NAME "rule in plain words"`, and print it with `buzzer guards`.
 
-To make sessions in one repo use it, paste this into that repo's `CLAUDE.md`:
-
-```markdown
-Shared things that only one session may use at a time (test devices, the Editor, ports) go through `buzzer`
-(`buzzer run <queue> -- <command>`; see the buzzer skill). Take the turn only when ready to use it now, release as soon as you stop.
-```
+An example skill for one specific agent tool lives in `examples/claude-skill/` (optional, not part of buzzer).
 
 ## Scopes
 
@@ -68,8 +63,8 @@ State lives in `~/.local/state/buzzer/` (override with `BUZZER_HOME`).
 | Case | What frees it |
 |---|---|
 | `run`: command ends or is killed | its own process, checked by process id |
-| `wait`: the agent session that took it dies | detected: the nearest parent process named `claude` (or `BUZZER_OWNER_PID`) is checked by process id |
-| `wait`: session alive but you forget `done` | the `--hold` limit (default 30m); `renew` restarts it |
+| `wait --owner PID`: that process ends | the turn is released |
+| `wait`: you forget `done` | the `--hold` limit (default 30m); `renew` restarts it |
 | A waiter's session or command dies | its ticket is dropped, it loses its place |
 
 ## Rules of the line
@@ -80,7 +75,7 @@ Several `--first` callers go in the order they asked.
 ## Limits
 
 One machine only. Claims are cooperative: a process that never calls buzzer is not stopped.
-`wait` finds its session by looking for a parent process named `claude`; for another agent set `BUZZER_OWNER_PID`. With neither, only the hold limit frees it.
+Without `--owner`, `wait` only frees itself at the hold limit.
 
 ## Tests
 

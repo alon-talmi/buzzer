@@ -298,3 +298,46 @@ fn bad_queue_name_is_refused() {
     let world = World::new();
     assert!(!world.cli(&["wait", "../evil"]).status.success());
 }
+
+#[test]
+fn guards_list_project_and_global_rules_in_plain_words() {
+    let world = World::new();
+    assert!(world.cli(&["guard", "staging-server", "Only one person deploys at a time."]).status.success());
+    assert!(world.cli(&["guard", "label-printer", "Shared printer.", "-g"]).status.success());
+    let listing = text(&world.cli(&["guards"]));
+    assert!(listing.contains("staging-server  [project:repo]  Only one person deploys at a time."), "{listing}");
+    assert!(listing.contains("label-printer -g  [global]  Shared printer."), "{listing}");
+    let elsewhere = text(&world.cli_in(&world.other_repo, &["guards"]));
+    assert!(!elsewhere.contains("staging-server"));
+    assert!(elsewhere.contains("label-printer"));
+}
+
+#[test]
+fn guards_quiet_if_empty_prints_nothing_when_empty() {
+    let world = World::new();
+    assert_eq!(text(&world.cli(&["guards", "--quiet-if-empty"])), "");
+    assert!(text(&world.cli(&["guards"])).contains("nothing is listed"));
+}
+
+#[test]
+fn unguard_removes_an_entry() {
+    let world = World::new();
+    world.cli(&["guard", "brand-deck", "One editor at a time."]);
+    assert!(world.cli(&["unguard", "brand-deck"]).status.success());
+    assert!(!text(&world.cli(&["guards"])).contains("brand-deck"));
+    assert!(!world.cli(&["unguard", "brand-deck"]).status.success());
+}
+
+#[test]
+fn guard_does_not_break_the_queue_listing() {
+    let world = World::new();
+    world.cli(&["guard", "deck", "One editor."]);
+    world.cli(&["wait", "deck"]);
+    assert!(text(&world.cli(&["status"])).contains("project:repo/deck"));
+}
+
+#[test]
+fn guide_prints() {
+    let world = World::new();
+    assert!(text(&world.cli(&["guide"])).contains("# buzzer guide"));
+}
