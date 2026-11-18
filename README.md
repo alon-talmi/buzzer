@@ -1,7 +1,7 @@
 # buzzer
 
 Wait your turn for a shared thing (a test device, the Unity Editor, a port), then get buzzed.
-A single small Rust binary, no server. macOS and Linux. Any tool or agent can use it.
+A single small Rust binary, no server. Apple-silicon macOS only. Any tool or agent can use it.
 
 ## Install
 
@@ -55,7 +55,8 @@ State lives in `~/.local/state/buzzer/` (override with `BUZZER_HOME`).
 | Case | What frees it |
 |---|---|
 | `run`: command ends or is killed | its own process, checked by process id |
-| `wait`: you forget `done` | the `--hold` limit (default 2h); `renew` restarts it |
+| `wait`: the agent session that took it dies | detected: the nearest parent process named `claude` (or `BUZZER_OWNER_PID`) is checked by process id |
+| `wait`: session alive but you forget `done` | the `--hold` limit (default 2h); `renew` restarts it |
 | A waiter's session or command dies | its ticket is dropped, it loses its place |
 
 ## Rules of the line
@@ -66,7 +67,7 @@ Several `--first` callers go in the order they asked.
 ## Limits
 
 One machine only. Claims are cooperative: a process that never calls buzzer is not stopped.
-`wait` cannot see if the holder's session died (only `run` can), so it relies on the hold limit.
+`wait` finds its session by looking for a parent process named `claude`; for another agent set `BUZZER_OWNER_PID`. With neither, only the hold limit frees it.
 
 ## Tests
 

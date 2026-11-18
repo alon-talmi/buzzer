@@ -318,6 +318,33 @@ fn place_in_line(queue: &Queue, ticket: &Ticket) -> usize {
     line(queue).iter().position(|t| t.id == ticket.id).map_or(1, |i| i + 1)
 }
 
+fn parent_and_command(pid: u32) -> Option<(u32, String)> {
+    let out = Command::new("ps").args(["-o", "ppid=,command=", "-p", &pid.to_string()]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let (parent, command) = text.split_once(' ')?;
+    Some((parent.trim().parse().ok()?, command.to_string()))
+}
+
+/// The agent session that asked for the turn: BUZZER_OWNER_PID, else the nearest ancestor named like claude.
+fn detect_session_pid() -> Option<u32> {
+    if let Some(pid) = std::env::var("BUZZER_OWNER_PID").ok().and_then(|v| v.parse().ok()) {
+        return Some(pid);
+    }
+    let mut pid = std::process::id();
+    for _ in 0..12 {
+        let (parent, _) = parent_and_command(pid)?;
+        if parent <= 1 {
+            return None;
+        }
+        let (_, command) = parent_and_command(parent)?;
+        if command.to_lowercase().contains("claude") {
+            return Some(parent);
+        }
+        pid = parent;
+    }
+    None
+}
+
 fn register_stop_flag() -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     for signal in [SIGTERM, SIGINT, SIGHUP] {
@@ -361,7 +388,7 @@ fn command_wait(at: Where, join_options: JoinOptions) -> i32 {
     let stop = register_stop_flag();
     let mut ticket = join(&queue, &join_options);
     let hint = release_hint(&at.queue, at.global, &ticket);
-    if wait_for_turn(&queue, &mut ticket, None, join_options.quiet, &hint, &stop) {
+    if wait_for_turn(&queue, &mut ticket, detect_session_pid(), join_options.quiet, &hint, &stop) {
         return 0;
     }
     leave(&queue, &ticket);

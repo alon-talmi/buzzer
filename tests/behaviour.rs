@@ -223,6 +223,22 @@ fn run_releases_when_command_ends() {
 }
 
 #[test]
+fn wait_turn_ends_when_the_owning_session_dies() {
+    let world = World::new();
+    let mut session = Command::new("sleep").arg("60").spawn().unwrap();
+    let held = world
+        .command(&world.repo, &["wait", "device"])
+        .env("BUZZER_OWNER_PID", session.id().to_string())
+        .output()
+        .unwrap();
+    assert!(held.status.success());
+    assert!(world.status("device", &world.repo, &[]).contains("HOLDS"));
+    session.kill().unwrap();
+    session.wait().unwrap();
+    assert!(world.status("device", &world.repo, &[]).contains("(idle)"));
+}
+
+#[test]
 fn run_passes_exit_code_through() {
     let world = World::new();
     let result = world.cli(&["run", "device", "--", "sh", "-c", "exit 7"]);

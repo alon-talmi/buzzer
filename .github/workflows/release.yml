@@ -5,38 +5,17 @@ on:
 permissions:
   contents: write
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-apple-darwin, os: macos-latest }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - run: rustup target add ${{ matrix.target }}
-      - run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Package
-        run: |
-          name="buzzer-${{ github.ref_name }}-${{ matrix.target }}"
-          tar -C target/${{ matrix.target }}/release -czf "$name.tar.gz" buzzer
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: buzzer-*.tar.gz
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
+  release:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          mkdir dist
+          tar -C target/release -czf "dist/buzzer-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz" buzzer
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Usage: write-formula.sh <tag> <folder holding the four buzzer-<tag>-<target>.tar.gz files>
+# Usage: write-formula.sh <tag> <folder holding buzzer-<tag>-aarch64-apple-darwin.tar.gz>
 set -eu
 tag="$1"; dir="$2"; version="${tag#v}"
 base="https://github.com/alon-talmi/buzzer/releases/download/$tag"
@@ -11,27 +11,11 @@ class Buzzer < Formula
   version "$version"
   license "MIT"
 
-  on_macos do
-    on_arm do
-      url "$base/buzzer-$tag-aarch64-apple-darwin.tar.gz"
-      sha256 "$(sha aarch64-apple-darwin)"
-    end
-    on_intel do
-      url "$base/buzzer-$tag-x86_64-apple-darwin.tar.gz"
-      sha256 "$(sha x86_64-apple-darwin)"
-    end
-  end
+  depends_on arch: :arm64
+  depends_on :macos
 
-  on_linux do
-    on_arm do
-      url "$base/buzzer-$tag-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "$(sha aarch64-unknown-linux-gnu)"
-    end
-    on_intel do
-      url "$base/buzzer-$tag-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "$(sha x86_64-unknown-linux-gnu)"
-    end
-  end
+  url "$base/buzzer-$tag-aarch64-apple-darwin.tar.gz"
+  sha256 "$(sha aarch64-apple-darwin)"
 
   def install
     bin.install "buzzer"
