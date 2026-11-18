@@ -1,7 +1,14 @@
 # buzzer
 
 Wait your turn for a shared thing (a test device, the Unity Editor, a port), then get buzzed.
-One file, Python 3 standard library only, no server. macOS and Linux. Any tool or agent can use it.
+A single small Rust binary, no server. macOS and Linux. Any tool or agent can use it.
+
+## Install
+
+```bash
+brew install OWNER/tap/buzzer     # update later with: brew upgrade buzzer
+# or from source: cargo install --path .
+```
 
 ## Why no messages and no polling
 
@@ -55,5 +62,5 @@ One machine only. Claims are cooperative: a process that never calls buzzer is n
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -v
+cargo test
 ```

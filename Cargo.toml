@@ -1,0 +1,24 @@
+[package]
+name = "buzzer"
+version = "0.1.0"
+edition = "2021"
+description = "Wait your turn for a shared thing (a test device, an editor), then get buzzed."
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
