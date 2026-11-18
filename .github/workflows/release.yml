@@ -2,14 +2,21 @@ name: Release
 on:
   push:
     tags: ["v*"]
+permissions:
+  contents: write
 jobs:
-  bump-formula:
+  update-formula:
     runs-on: ubuntu-latest
     steps:
-      - uses: mislav/bump-homebrew-formula-action@v3
+      - uses: actions/checkout@v4
         with:
-          formula-name: buzzer
-          homebrew-tap: ${{ github.repository_owner }}/homebrew-tap
-          download-url: https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz
-        env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ref: main
+      - name: Point the formula at this tag
+        run: |
+          url="https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz"
+          sha=$(curl -sL "$url" | shasum -a 256 | cut -d' ' -f1)
+          sed -i "s#^  url .*#  url \"$url\"#; s#^  sha256 .*#  sha256 \"$sha\"#" Formula/buzzer.rb
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git commit -am "Formula: ${{ github.ref_name }}"
+          git push
