@@ -74,5 +74,5 @@ Every worktree of one git project on a machine shares that project's queues.
 | `Refusing to load formula … from untrusted tap` | `brew trust alon-talmi/buzzer` |
 | `buzzer: command not found` after install | Open a new terminal; check `brew --prefix` is on your PATH. |
 | `buzzer --version` shows an old version | Another copy comes earlier in PATH. Run `which -a buzzer` and remove the old one. |
-| `bad CPU type in executable` / no formula for your Mac | You are on an Intel Mac. Build from source (above). |
+| Brew says the formula needs an arm64 Mac | You are on an Intel Mac. Build from source (above). |
 | Queues look empty on a second machine | State is per machine. Install and list guards there too. |
