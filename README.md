@@ -35,6 +35,12 @@ buzzer kick editor --ticket ID      # remove a stuck ticket (ID is in `status`)
 Options for `wait` and `run`: `--label "who I am"` (shown in status), `--hold 2h` (default 2h),
 `-q` (quiet), `-g` (global scope).
 
+## Teach your Claude sessions
+
+```bash
+mkdir -p ~/.claude/skills/buzzer && cp skill/buzzer/SKILL.md ~/.claude/skills/buzzer/
+```
+
 ## Scopes
 
 - **Project (default):** one queue namespace per git repository. **Every worktree of the same repo shares it.**
