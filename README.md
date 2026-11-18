@@ -19,6 +19,8 @@ brew update && brew upgrade buzzer                                  # later
 Run it in the background of an agent session (for example a background shell command) and the
 harness wakes the session when the command exits. Nobody messages anybody.
 
+Full instructions, update, uninstall and troubleshooting: [docs/install.md](docs/install.md).
+
 ## Use
 
 ```bash
