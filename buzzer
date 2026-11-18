@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""buzzer: wait your turn for a shared thing, then get buzzed. See README.md."""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+POLL_SECONDS = 0.25
+DEFAULT_HOLD = "2h"
+
+
+def state_root():
+    return os.environ.get("BUZZER_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state", "buzzer")
+
+
+def parse_duration(text):
+    match = re.fullmatch(r"(\d+)([smhd]?)", text.strip())
+    if not match:
+        raise SystemExit(f"buzzer: bad duration '{text}' (use 90s, 30m, 2h, 1d)")
+    return int(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+
+
+def project_identity():
+    """Every worktree of one repo resolves to the same project (the repo's shared git dir)."""
+    override = os.environ.get("BUZZER_PROJECT")
+    if override:
+        return override, os.path.basename(override.rstrip("/")) or "project"
+    try:
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        root = os.path.dirname(common) if os.path.basename(common) == ".git" else common
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        root = os.getcwd()
+    root = os.path.realpath(root)
+    return root, os.path.basename(root)
+
+
+def scope_directory(is_global):
+    if is_global:
+        return os.path.join(state_root(), "global"), "global"
+    root, name = project_identity()
+    digest = hashlib.sha1(root.encode()).hexdigest()[:8]
+    return os.path.join(state_root(), "projects", f"{name}-{digest}"), f"project:{name}"
+
+
+def queue_directory(queue, is_global):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", queue):
+        raise SystemExit(f"buzzer: bad queue name '{queue}' (letters, digits, . _ -)")
+    base, label = scope_directory(is_global)
+    path = os.path.join(base, queue)
+    os.makedirs(os.path.join(path, "tickets"), exist_ok=True)
+    return path, f"{label}/{queue}"
+
+
+@contextlib.contextmanager
+def locked(path):
+    with open(os.path.join(path, "lock"), "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def read_tickets(path):
+    folder = os.path.join(path, "tickets")
+    tickets = []
+    for name in os.listdir(folder):
+        try:
+            with open(os.path.join(folder, name)) as handle:
+                tickets.append(json.load(handle))
+        except (OSError, ValueError):
+            continue
+    return tickets
+
+
+def write_ticket(path, ticket):
+    target = os.path.join(path, "tickets", ticket["id"] + ".json")
+    with open(target + ".tmp", "w") as handle:
+        json.dump(ticket, handle)
+    os.replace(target + ".tmp", target)
+
+
+def remove_ticket(path, ticket_id):
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(os.path.join(path, "tickets", ticket_id + ".json"))
+
+
+def is_dead(ticket, now):
+    if ticket["state"] == "waiting":
+        return not pid_alive(ticket["pid"])
+    if ticket["expires"] <= now:
+        return True
+    return bool(ticket.get("owner_pid")) and not pid_alive(ticket["owner_pid"])
+
+
+def reap(path, now):
+    for ticket in read_tickets(path):
+        if is_dead(ticket, now):
+            remove_ticket(path, ticket["id"])
+
+
+def line_order(ticket):
+    return (0 if ticket["jumped"] else 1, ticket["created"], ticket["id"])
+
+
+def sorted_line(path):
+    return sorted((t for t in read_tickets(path) if t["state"] == "waiting"), key=line_order)
+
+
+def current_holder(path):
+    return next((t for t in read_tickets(path) if t["state"] == "held"), None)
+
+
+def join(path, args):
+    ticket = {
+        "id": f"{time.time_ns()}-{os.getpid()}",
+        "pid": os.getpid(),
+        "state": "waiting",
+        "jumped": bool(args.first),
+        "created": time.time(),
+        "label": args.label or "",
+        "cwd": os.getcwd(),
+        "hold": parse_duration(args.hold),
+    }
+    with locked(path):
+        write_ticket(path, ticket)
+    return ticket
+
+
+def take_turn_if_first(path, ticket, owner_pid):
+    with locked(path):
+        reap(path, time.time())
+        line = sorted_line(path)
+        if line and line[0]["id"] == ticket["id"] and current_holder(path) is None:
+            ticket["state"] = "held"
+            ticket["owner_pid"] = owner_pid
+            ticket["expires"] = time.time() + ticket["hold"]
+            write_ticket(path, ticket)
+            return True
+    return False
+
+
+def wait_for_turn(path, name, ticket, owner_pid, quiet, release_hint):
+    announced = None
+    while not take_turn_if_first(path, ticket, owner_pid):
+        with locked(path):
+            position = [t["id"] for t in sorted_line(path)].index(ticket["id"]) + 1
+        if position != announced and not quiet:
+            print(f"buzzer: waiting on {name} (place {position} in line)", file=sys.stderr, flush=True)
+            announced = position
+        time.sleep(POLL_SECONDS)
+    if not quiet:
+        print(f"buzzer: YOUR TURN on {name} (ticket {ticket['id']}). Release with: {release_hint(ticket)}", flush=True)
+
+
+def leave_without_turn(path, ticket):
+    with locked(path):
+        remove_ticket(path, ticket["id"])
+
+
+def install_exit_handlers():
+    def stop(signum, frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGHUP, stop)
+
+
+def release_hint(args):
+    scope = " -g" if args.global_scope else ""
+    return lambda ticket: f"buzzer done {args.queue}{scope} --ticket {ticket['id']}"
+
+
+def command_wait(args):
+    path, name = queue_directory(args.queue, args.global_scope)
+    install_exit_handlers()
+    ticket = join(path, args)
+    try:
+        wait_for_turn(path, name, ticket, None, args.quiet, release_hint(args))
+    except BaseException:
+        leave_without_turn(path, ticket)
+        raise
+    return 0
+
+
+def command_run(args):
+    path, name = queue_directory(args.queue, args.global_scope)
+    install_exit_handlers()
+    ticket = join(path, args)
+    try:
+        wait_for_turn(path, name, ticket, os.getpid(), args.quiet, release_hint(args))
+        return subprocess.call(args.command)
+    finally:
+        leave_without_turn(path, ticket)
+
+
+def command_done(args):
+    path, name = queue_directory(args.queue, args.global_scope)
+    with locked(path):
+        reap(path, time.time())
+        holder = current_holder(path)
+        if holder is None:
+            print(f"buzzer: nobody holds {name}")
+            return 0
+        if holder["id"] != args.ticket:
+            print(f"buzzer: ticket {args.ticket} does not hold {name}; only the holder can release it (use kick to override)", file=sys.stderr)
+            return 1
+        remove_ticket(path, holder["id"])
+    print(f"buzzer: released {name}")
+    return 0
+
+
+def command_renew(args):
+    path, name = queue_directory(args.queue, args.global_scope)
+    with locked(path):
+        holder = current_holder(path)
+        if holder is None:
+            print(f"buzzer: nobody holds {name}", file=sys.stderr)
+            return 1
+        holder["expires"] = time.time() + (parse_duration(args.hold) if args.hold else holder["hold"])
+        write_ticket(path, holder)
+    print(f"buzzer: renewed {name}")
+    return 0
+
+
+def command_kick(args):
+    path, name = queue_directory(args.queue, args.global_scope)
+    with locked(path):
+        if not any(t["id"] == args.ticket for t in read_tickets(path)):
+            print(f"buzzer: no ticket {args.ticket} on {name}", file=sys.stderr)
+            return 1
+        remove_ticket(path, args.ticket)
+    print(f"buzzer: removed ticket {args.ticket} from {name}")
+    return 0
+
+
+def describe(ticket, now):
+    who = ticket["label"] or ticket["cwd"]
+    if ticket["state"] == "held":
+        return f"HOLDS   {who}  (ticket {ticket['id']}, {max(0, int(ticket['expires'] - now))}s left)"
+    return f"waiting {who}  (ticket {ticket['id']}{', jumped' if ticket['jumped'] else ''})"
+
+
+def command_status(args):
+    now = time.time()
+    names = [args.queue] if args.queue else list_queue_names(args.global_scope)
+    if not names:
+        print("buzzer: no queues here")
+    for queue in names:
+        path, name = queue_directory(queue, args.global_scope)
+        with locked(path):
+            reap(path, now)
+            holder = current_holder(path)
+            line = sorted_line(path)
+        print(name)
+        if holder is None and not line:
+            print("  (idle)")
+        if holder is not None:
+            print("  " + describe(holder, now))
+        for ticket in line:
+            print("  " + describe(ticket, now))
+    return 0
+
+
+def list_queue_names(is_global):
+    base, _ = scope_directory(is_global)
+    if not os.path.isdir(base):
+        return []
+    return sorted(n for n in os.listdir(base) if os.path.isdir(os.path.join(base, n)))
+
+
+def add_common(parser, with_hold=False, with_join=False):
+    parser.add_argument("queue")
+    parser.add_argument("-g", "--global", dest="global_scope", action="store_true",
+                        help="use the machine-wide scope instead of this project's")
+    if with_join:
+        parser.add_argument("--first", action="store_true", help="jump ahead of everyone waiting (never preempts the current holder)")
+        parser.add_argument("--label", help="who you are, shown in status")
+        parser.add_argument("-q", "--quiet", action="store_true")
+    if with_hold or with_join:
+        parser.add_argument("--hold", default=DEFAULT_HOLD if with_join else None,
+                            help=f"longest you may hold it before it frees itself{' (default ' + DEFAULT_HOLD + ')' if with_join else ''}")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="buzzer", description="Wait your turn for a shared thing, then get buzzed.")
+    sub = parser.add_subparsers(dest="verb", required=True)
+    p = sub.add_parser("wait", help="block until it is your turn, then exit 0 (you now hold it)")
+    add_common(p, with_join=True)
+    p.set_defaults(handler=command_wait)
+    p = sub.add_parser("run", help="wait, run a command, release when it ends: buzzer run NAME -- cmd ...")
+    add_common(p, with_join=True)
+    p.add_argument("command", nargs=argparse.REMAINDER)
+    p.set_defaults(handler=command_run)
+    p = sub.add_parser("done", help="release the queue you hold")
+    add_common(p)
+    p.add_argument("--ticket", required=True, help="the ticket id printed when it became your turn")
+    p.set_defaults(handler=command_done)
+    p = sub.add_parser("renew", help="restart the hold timer")
+    add_common(p, with_hold=True)
+    p.set_defaults(handler=command_renew)
+    p = sub.add_parser("kick", help="remove a ticket (stuck holder or waiter)")
+    add_common(p)
+    p.add_argument("--ticket", required=True)
+    p.set_defaults(handler=command_kick)
+    p = sub.add_parser("status", help="show a queue, or every queue in the scope")
+    p.add_argument("queue", nargs="?")
+    p.add_argument("-g", "--global", dest="global_scope", action="store_true")
+    p.set_defaults(handler=command_status)
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    if args.verb == "run":
+        if args.command and args.command[0] == "--":
+            args.command = args.command[1:]
+        if not args.command:
+            raise SystemExit("buzzer: run needs a command after --")
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
