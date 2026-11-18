@@ -1,10 +1,10 @@
 class Buzzer < Formula
   desc "Wait your turn for a shared thing (a test device, an editor), then get buzzed"
-  homepage "https://github.com/OWNER/buzzer"
-  url "https://github.com/OWNER/buzzer/archive/refs/tags/v0.1.0.tar.gz"
+  homepage "https://github.com/alon-talmi/buzzer"
+  url "https://github.com/alon-talmi/buzzer/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "REPLACE_WITH_TARBALL_SHA256"
   license "MIT"
-  head "https://github.com/OWNER/buzzer.git", branch: "main"
+  head "https://github.com/alon-talmi/buzzer.git", branch: "main"
 
   depends_on "rust" => :build
 

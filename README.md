@@ -6,7 +6,7 @@ A single small Rust binary, no server. macOS and Linux. Any tool or agent can us
 ## Install
 
 ```bash
-brew install OWNER/tap/buzzer     # update later with: brew upgrade buzzer
+brew install alon-talmi/tap/buzzer     # update later with: brew upgrade buzzer
 # or from source: cargo install --path .
 ```
 
