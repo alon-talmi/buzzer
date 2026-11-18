@@ -490,14 +490,20 @@ fn human(seconds: u64) -> String {
     }
 }
 
+fn taken_and_renewed(ticket: &Ticket) -> (u64, u64) {
+    let taken = if ticket.taken > 0 { ticket.taken } else { ticket.expires.saturating_sub(ticket.hold) };
+    (taken, if ticket.renewed > 0 { ticket.renewed } else { taken })
+}
+
 fn describe(ticket: &Ticket, now: u64) -> String {
     let who = if ticket.label.is_empty() { &ticket.cwd } else { &ticket.label };
     if ticket.held {
+        let (taken, renewed) = taken_and_renewed(ticket);
         return format!(
             "HOLDS   {who}  (ticket {}, held {}, renewed {} ago, frees itself in {})",
             ticket.id,
-            human(now.saturating_sub(ticket.taken)),
-            human(now.saturating_sub(ticket.renewed)),
+            human(now.saturating_sub(taken)),
+            human(now.saturating_sub(renewed)),
             human(ticket.expires.saturating_sub(now))
         );
     }

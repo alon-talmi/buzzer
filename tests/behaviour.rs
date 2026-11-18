@@ -341,3 +341,15 @@ fn guide_prints() {
     let world = World::new();
     assert!(text(&world.cli(&["guide"])).contains("# buzzer guide"));
 }
+
+#[test]
+fn status_of_a_ticket_from_an_older_version_shows_sane_times() {
+    let world = World::new();
+    world.cli(&["wait", "device"]);
+    let tickets = std::fs::read_dir(world.home.join("projects")).unwrap().flatten().next().unwrap().path().join("device/tickets");
+    let file = std::fs::read_dir(tickets).unwrap().flatten().next().unwrap().path();
+    let old = std::fs::read_to_string(&file).unwrap().replace("\"taken\":", "\"x_taken\":").replace("\"renewed\":", "\"x_renewed\":");
+    std::fs::write(&file, old).unwrap();
+    let status = world.status("device", &world.repo, &[]);
+    assert!(status.contains("held 0s") || status.contains("held 1s"), "{status}");
+}
